@@ -1,0 +1,16 @@
+{
+  "name": "surebet-co",
+  "version": "1.0.0",
+  "description": "Surebet Colombia — 11 casas, tiempo real",
+  "main": "proxy-surebet.js",
+  "scripts": {
+    "start": "node proxy-surebet.js",
+    "dev":   "node proxy-surebet.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": ["surebet", "arbitrage", "colombia", "apuestas"],
+  "license": "UNLICENSED",
+  "private": true
+}
