@@ -381,7 +381,7 @@ td{padding:8px 8px;vertical-align:middle}
 // ══════════════════════════════════════════════════════
 // CONFIG
 // ══════════════════════════════════════════════════════
-const SCAN_SEC = 75;
+const SCAN_SEC = 10;
 const STATS_SEC = 300;
 const UPCOMING_DAYS = 14;
 
@@ -418,7 +418,7 @@ function withTimeout(promise, ms) {
 }
 
 // ── Fetch a través del proxy local ───────────────────
-async function proxyFetch(targetUrl, opts={}, timeoutMs=9000) {
+async function proxyFetch(targetUrl, opts={}, timeoutMs=5000) {
   const pUrl = `${PROXY_BASE}/proxy?url=${encodeURIComponent(targetUrl)}`;
   const pOpts = { method: opts.method || 'GET', headers: { Accept: 'application/json' } };
   if (opts.body) { pOpts.method = 'POST'; pOpts.body = opts.body; pOpts.headers['Content-Type'] = opts.headers?.['Content-Type'] || 'application/x-www-form-urlencoded'; }
@@ -430,7 +430,7 @@ async function proxyFetch(targetUrl, opts={}, timeoutMs=9000) {
 }
 
 // ── Fetch directo (solo para APIs con CORS abierto) ──
-async function directFetch(url, opts={}, timeoutMs=7000) {
+async function directFetch(url, opts={}, timeoutMs=5000) {
   try {
     const r = await withTimeout(fetch(url, opts), timeoutMs);
     if (r.ok) return r;
@@ -466,14 +466,14 @@ async function safeJSON(url, opts={}) {
 // ── Rate limiter global para Kambi (evita 429) ───────
 let _lastKambi = 0;
 let kambiBlocked = false; // true = IP bloqueada por rate-limit global
-const KAMBI_MIN_GAP = 1500; // ms entre peticiones Kambi (evita 429)
+const KAMBI_MIN_GAP = 500; // ms entre peticiones Kambi
 async function kambiThrottled(url) {
   const now = Date.now();
   const wait = Math.max(0, KAMBI_MIN_GAP - (now - _lastKambi));
   if (wait > 0) await new Promise(r => setTimeout(r, wait));
   _lastKambi = Date.now();
   // Kambi tiene CORS abierto — fetch directo
-  const r = await directFetch(url, {}, 8000);
+  const r = await directFetch(url, {}, 5000);
   if (!r) return null;
   if (r.status === 429) { kambiBlocked = true; return null; }
   try {
@@ -1347,8 +1347,13 @@ function renderSB(){
     `<button class="fb${activeSport==='all'?' on':''}" onclick="setSport('all',this)">Todos</button>`+
     sports.map(s=>`<button class="fb${activeSport===s?' on':''}" onclick="setSport('${s}',this)">${SPORT_LABELS[s]||s}</button>`).join('');
 
+  // Badge de estado en tiempo real
+  const rbtn=document.getElementById('rbtn');
+  if(!scanDone&&rbtn)rbtn.textContent='↻ Actualizando...';
+  else if(rbtn)rbtn.textContent='↻ Actualizar';
+
   if(rows.length===0){
-    document.getElementById('sbTable').innerHTML=`<div class="stbox"><div style="font-size:2rem;margin-bottom:8px">${scanDone?'🔍':'⏳'}</div><h3>${scanDone?'Sin surebets en este momento':'Escaneando...'}</h3><p>${scanDone?`Monitoreando automáticamente cada ${SCAN_SEC}s · ${activeBks} casas activas de ${Object.keys(BK).length}`:'Conectando con las 13 casas...'}</p></div>`;
+    document.getElementById('sbTable').innerHTML=`<div class="stbox"><div style="font-size:2rem;margin-bottom:8px">${scanDone?'🔍':'⏳'}</div><h3>${scanDone?'Sin surebets en este momento':'Escaneando casas...'}</h3><p>${scanDone?`Próxima actualización en ${SCAN_SEC}s · ${activeBks} casas activas`:'Obteniendo cuotas en tiempo real...'}</p></div>`;
     return;
   }
 
@@ -1434,6 +1439,7 @@ function startHealthCheckLoop() {
 // Diagnóstico por casa: cuántas cuotas obtuvo en último scan
 let bkDiag={};
 
+let _isFirstScan=true;
 async function startScan(){
   clearInterval(cdTimer);
   Object.keys(bkStatus).forEach(k=>{bkStatus[k]=false;bkDiag[k]=0;});
@@ -1441,68 +1447,71 @@ async function startScan(){
   kambiBlocked=false;
   document.getElementById('kambiBanner').style.display='none';
   document.getElementById('rbtn').disabled=true;
-  document.getElementById('dot').className='dot loading';
-  document.getElementById('stxt').textContent='Verificando proxy...';
-  scanDone=false;
-  document.getElementById('pfill').style.width='0';
+  document.getElementById('pfill').style.width='2%';
   updateBKBar();
 
-  // Verificar proxy antes de iniciar
-  await checkProxy();
-  document.getElementById('stxt').textContent=`Escaneando 13 casas${proxyOk?' (proxy activo)':''}...`;
+  // Solo verificar proxy en el primer scan o si estaba offline
+  if(_isFirstScan||!proxyOk){
+    document.getElementById('dot').className='dot loading';
+    document.getElementById('stxt').textContent='Verificando proxy...';
+    await checkProxy();
+    _isFirstScan=false;
+  }
+  scanDone=false;
+  document.getElementById('dot').className='dot loading';
+  document.getElementById('stxt').textContent=`↻ Escaneando${proxyOk?' (proxy activo)':''}...`;
 
-  const allEvts=[];let done=0;
-  // 4 casas Kambi (solo fútbol) + 6 no-Kambi × 9 deportes
-  const totalTasks=4+(SPORTS.length*8);
+  const allEvts=[];
+  let done=0;
+  // Kambi fútbol (4) + 9 casas × todos los deportes
+  const totalTasks=4+(SPORTS.length*9);
+  let _renderScheduled=false;
 
   const addEvts=(bk,evts)=>{
+    if(!evts||!evts.length)return;
     allEvts.push(...evts);
     totalEvtsFetched+=evts.length;
     bkDiag[bk]=(bkDiag[bk]||0)+evts.length;
     done+=1;
-    document.getElementById('pfill').style.width=Math.min(100,done/totalTasks*100)+'%';
+    document.getElementById('pfill').style.width=Math.min(98,2+done/totalTasks*96)+'%';
     document.getElementById('sBks').textContent=Object.values(bkStatus).filter(Boolean).length+'/'+Object.keys(BK).length;
-    document.getElementById('stxt').textContent=`Procesando... ${Object.values(bkStatus).filter(Boolean).length} casas activas`;
+    // Actualizar surebets incrementalmente (debounce 120ms para no saturar)
+    if(!_renderScheduled){
+      _renderScheduled=true;
+      setTimeout(()=>{
+        allSB=calcSurebets(allEvts);
+        renderSB();
+        _renderScheduled=false;
+      },120);
+    }
     updateBKBar();
   };
 
-  // ── FASE 1: Kambi SOLO para fútbol (4 llamadas en vez de 36, evita 429) ──────
+  // ── TODO EN PARALELO: Kambi (fútbol) + todas las casas simultáneamente ──
   const fbl=SPORTS.find(s=>s.key==='football');
+  const allTasks=[];
+
+  // Kambi fútbol — 4 casas en paralelo (sin pausa artificial)
   if(fbl){
-    // Betplay + Rushbet primero
-    for(const [k,ops] of [['betplay',['betplay']],['rushbet',['rsico']]]){
-      addEvts(k, await tryKambi(fbl.key,k,ops));
-    }
-    // Pausa 4s → resetea contador de rate-limit en Kambi antes de Luckia/Betsson
-    document.getElementById('stxt').textContent='Pausa anti-429 Kambi (Luckia/Betsson)...';
-    await new Promise(r=>setTimeout(r,4000));
-    for(const [k,ops] of [['luckia',['luckia']],['betsson',['betsson']]]){
-      addEvts(k, await tryKambi(fbl.key,k,ops));
+    for(const [k,ops] of [['betplay',['betplay']],['rushbet',['rsico']],['luckia',['luckia']],['betsson',['betsson']]]){
+      allTasks.push(tryKambi(fbl.key,k,ops).then(evts=>addEvts(k,evts)).catch(()=>{}));
     }
   }
 
-  // ── FASE 2: Casas no-Kambi para TODOS los deportes (paralelo) ──────────────
-  const sportTasks=SPORTS.map(sp=>async()=>{
-    const [ce,we,ye,be,pe,w1,se,ze,bw]=await Promise.all([
-      fetchCodere(sp.key,sp.codere),
-      fetchWplay(sp.key),
-      fetchYajuego(sp.key),
-      fetchBetano(sp.key),
-      fetchPinnacle(sp.key),
-      fetch1win(sp.key),
-      fetchStake(sp.key),
-      fetchZamba(sp.key),
-      fetchBwin(sp.key),
-    ]);
-    addEvts('codere',ce);addEvts('wplay',we);addEvts('yajuego',ye);
-    addEvts('betano',be);addEvts('pinnacle',pe);addEvts('1win',w1);addEvts('stake',se);
-    addEvts('zamba',ze);addEvts('bwin',bw);
-  });
-
-  const chunks=(arr,n)=>{const r=[];for(let i=0;i<arr.length;i+=n)r.push(arr.slice(i,i+n));return r;};
-  for(const batch of chunks(sportTasks,3)){
-    await Promise.all(batch.map(fn=>fn()));
+  // Casas no-Kambi — todos los deportes completamente en paralelo
+  for(const sp of SPORTS){
+    allTasks.push(fetchCodere(sp.key,sp.codere).then(e=>addEvts('codere',e)).catch(()=>{}));
+    allTasks.push(fetchWplay(sp.key).then(e=>addEvts('wplay',e)).catch(()=>{}));
+    allTasks.push(fetchYajuego(sp.key).then(e=>addEvts('yajuego',e)).catch(()=>{}));
+    allTasks.push(fetchBetano(sp.key).then(e=>addEvts('betano',e)).catch(()=>{}));
+    allTasks.push(fetchPinnacle(sp.key).then(e=>addEvts('pinnacle',e)).catch(()=>{}));
+    allTasks.push(fetch1win(sp.key).then(e=>addEvts('1win',e)).catch(()=>{}));
+    allTasks.push(fetchStake(sp.key).then(e=>addEvts('stake',e)).catch(()=>{}));
+    allTasks.push(fetchZamba(sp.key).then(e=>addEvts('zamba',e)).catch(()=>{}));
+    allTasks.push(fetchBwin(sp.key).then(e=>addEvts('bwin',e)).catch(()=>{}));
   }
+
+  await Promise.allSettled(allTasks);
 
   allSB=calcSurebets(allEvts);
   scanDone=true;
@@ -1521,10 +1530,11 @@ async function startScan(){
   }
 
   let cd=SCAN_SEC;
+  document.getElementById('cdtxt').textContent=`· ${cd}s`;
   cdTimer=setInterval(()=>{
     cd--;
-    document.getElementById('cdtxt').textContent=`Actualiza en ${cd}s`;
-    if(cd<=0)startScan();
+    document.getElementById('cdtxt').textContent=`· ${cd}s`;
+    if(cd<=0){document.getElementById('cdtxt').textContent='';startScan();}
   },1000);
 }
 
