@@ -208,7 +208,6 @@ td{padding:8px 8px;vertical-align:middle}
 .sort-note{font-size:.68rem;color:var(--mut);font-style:italic}
 
 /* Skel */
-.skel{background:linear-gradient(90deg,var(--card),var(--surf),var(--card));background-size:200%;animation:skel 1.5s infinite;border-radius:10px;height:180px}
 
 @media(max-width:640px){
   header{padding:7px 12px}
@@ -237,7 +236,6 @@ td{padding:8px 8px;vertical-align:middle}
 .mini-fill{height:100%;border-radius:3px;transition:width .5s}
 .val-badge{display:inline-flex;align-items:center;padding:2px 7px;background:rgba(245,158,11,.13);border:1px solid rgba(245,158,11,.32);border-radius:4px;font-size:.62rem;font-weight:700;color:var(--warn);white-space:nowrap;flex-shrink:0}
 .val-star{font-size:.62rem;margin-left:2px}
-.no-stats-msg{font-size:.75rem;color:var(--mut);padding:8px;text-align:center;background:var(--surf);border-radius:6px;margin-bottom:8px}
 </style>
 </head>
 <body>
@@ -249,7 +247,6 @@ td{padding:8px 8px;vertical-align:middle}
   </div>
   <nav>
     <button class="active" onclick="showTab('sb',this)">🎯 Surebets</button>
-    <button onclick="showTab('stats',this)">📊 Estadísticas</button>
   </nav>
   <div class="hright">
     <div class="stbadge"><div class="dot loading" id="dot"></div><span id="stxt">Iniciando...</span></div>
@@ -348,52 +345,31 @@ td{padding:8px 8px;vertical-align:middle}
   </div>
 </div>
 
-<!-- ══ TAB 2: ESTADÍSTICAS ══ -->
-<div id="tab-stats" class="tc">
-  <div class="stats-wrap">
-    <div class="stats-hd">
-      <h2>📊 Próximos Partidos · Recomendaciones con %</h2>
-      <span style="font-size:.68rem;color:var(--mut)" id="statsCd"></span>
-    </div>
-    <div class="snote" style="margin:0 0 10px">
-      🧠 Modelo estadístico (Poisson + forma reciente) para <b>Ganador · Goles · BTTS · Córners · Tarjetas</b>.
-      <span style="color:var(--warn)">⭐ VALOR</span> = prob. estadística &gt; cuota implícita del bookmaker en &gt;5%.
-      <span style="color:var(--mut)">* Córners y tarjetas son estimados por promedio de liga ajustado.</span>
-    </div>
-    <div class="sport-tabs" id="statsSportTabs"></div>
-    <div class="league-tabs" id="leagueTabs"></div>
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:5px">
-      <div style="display:flex;gap:6px;font-size:.7rem;flex-wrap:wrap">
-        <span style="color:var(--mut)">Confianza:</span>
-        <span style="color:var(--acc)">● ≥70% Alta</span>
-        <span style="color:var(--warn)">● 55-70% Media</span>
-        <span style="color:var(--mut)">● &lt;55% Baja</span>
-      </div>
-      <span class="sort-note" id="sortNote">Ordenando por mayor confianza...</span>
-    </div>
-    <div class="mgrid" id="matchGrid">
-      <div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div>
-    </div>
-  </div>
-</div>
+
 
 <script>
 // ══════════════════════════════════════════════════════
 // CONFIG
 // ══════════════════════════════════════════════════════
 const SCAN_SEC = 10;
-const STATS_SEC = 300;
-const UPCOMING_DAYS = 14;
 
 // ── Proxy local (node proxy-surebet.js) ──────────────
 const PROXY_BASE = (window.location.protocol === 'file:' ? 'http://localhost:3001' : 'https://surebet-proxy.onrender.com');
 let proxyOk = false;
 
+let _proxyFirstCheck=true;
 async function checkProxy() {
+  // Render free tier puede tardar 30-60s al despertar — primer check espera más
+  const timeout=_proxyFirstCheck?40000:5000;
+  if(_proxyFirstCheck){
+    const el=document.getElementById('proxyBadge');
+    if(el)el.innerHTML='<span style="color:#f59e0b">⏳ Proxy...</span>';
+  }
+  _proxyFirstCheck=false;
   try {
     const r = await Promise.race([
       fetch(PROXY_BASE + '/ping'),
-      new Promise((_,rej) => setTimeout(() => rej(new Error('to')), 2500))
+      new Promise((_,rej) => setTimeout(() => rej(new Error('to')), timeout))
     ]);
     proxyOk = r.ok;
   } catch { proxyOk = false; }
@@ -406,10 +382,10 @@ function updateProxyBadge() {
   if (!el) return;
   if (proxyOk) {
     el.innerHTML = '<span style="color:var(--acc)">🔌 Proxy ON</span>';
-    el.title = 'Proxy local activo — todas las casas accesibles';
+    el.title = 'Proxy activo — todas las casas disponibles';
   } else {
     el.innerHTML = '<span style="color:var(--warn)">⚠️ Proxy OFF</span>';
-    el.title = 'Inicia: node proxy-surebet.js  (necesario para Wplay, Betano, Pinnacle, Yajuego, 1win)';
+    el.title = 'Proxy Render no responde — reintentando...';
   }
 }
 
@@ -518,21 +494,11 @@ const SPORT_LABELS={};SPORTS.forEach(s=>SPORT_LABELS[s.key]=s.label);
 
 // ── STATE ──
 let allSB=[],scanDone=false,activeSport='all';
-let statsSport='football',statsLeagueIdx=0,statsCards=[],statsDone=false;
 let bkStatus={betplay:false,rushbet:false,codere:false,wplay:false,luckia:false,betsson:false,yajuego:false,betano:false,pinnacle:false,'1win':false,stake:false,zamba:false,bwin:false};
-let cdTimer=null,statsTimer=null,kambiCache={};
+let cdTimer=null,kambiCache={};
 let totalEvtsFetched=0;
 
-// ══════════════════════════════════════════════════════
-// TABS
-// ══════════════════════════════════════════════════════
-function showTab(id,el){
-  document.querySelectorAll('.tc').forEach(t=>t.classList.remove('active'));
-  document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));
-  document.getElementById('tab-'+id).classList.add('active');
-  el.classList.add('active');
-  if(id==='stats'&&!statsDone)loadStats(statsSport,0);
-}
+
 
 // ══════════════════════════════════════════════════════
 // NORMALIZACIÓN / FUZZY MATCH
@@ -1538,380 +1504,6 @@ async function startScan(){
   },1000);
 }
 
-// ══════════════════════════════════════════════════════════════
-// ESTADÍSTICAS + RECOMENDACIONES CON PORCENTAJES
-// ══════════════════════════════════════════════════════════════
-
-const SDB='https://www.thesportsdb.com/api/v1/json/3';
-
-function poisson(lambda,k){
-  let p=Math.exp(-lambda);
-  for(let i=1;i<=k;i++)p*=lambda/i;
-  return p;
-}
-
-// P(total_goals > threshold)
-function pOverGoals(lH,lA,threshold){
-  let under=0;
-  for(let tot=0;tot<=threshold;tot++){
-    for(let h=0;h<=tot;h++) under+=poisson(lH,h)*poisson(lA,tot-h);
-  }
-  return Math.max(0.04,Math.min(0.97,1-under));
-}
-
-// Probabilidades de resultado (Poisson)
-function calcProb(hf,af){
-  if(!hf.n&&!af.n)return null;
-  const avg=1.25;
-  const lH=(hf.n?hf.gf*1.1:avg+0.1+((af.n?af.ga:avg)-avg)*0.5+((hf.n?hf.gf:avg)-avg)*0.5);
-  const lA=(af.n?af.gf*0.9:avg-0.1+((hf.n?hf.ga:avg)-avg)*0.4+((af.n?af.gf:avg)-avg)*0.4);
-  let pH=0,pD=0,pA=0;
-  for(let g1=0;g1<=9;g1++)for(let g2=0;g2<=9;g2++){
-    const p=poisson(Math.max(0.1,lH),g1)*poisson(Math.max(0.1,lA),g2);
-    if(g1>g2)pH+=p;else if(g1===g2)pD+=p;else pA+=p;
-  }
-  const tot=pH+pD+pA;
-  return{h:+(pH/tot).toFixed(3),d:+(pD/tot).toFixed(3),a:+(pA/tot).toFixed(3),lH:+lH.toFixed(2),lA:+lA.toFixed(2)};
-}
-
-// Calcular TODAS las recomendaciones con % para un partido
-function calcAllRecs(hf,af,homeTeam,awayTeam){
-  const recs=[];
-  const prob=calcProb(hf,af);
-
-  // ─── GANADOR ───
-  if(prob){
-    const maxP=Math.max(prob.h,prob.d,prob.a);
-    const topLabel=prob.h===maxP?`Local — ${homeTeam.slice(0,16)}`:prob.a===maxP?`Visitante — ${awayTeam.slice(0,16)}`:'Empate';
-    recs.push({
-      cat:'🏆 Ganador',key:'winner',
-      topBet:topLabel,topProb:maxP,
-      lines:[
-        {label:`1 Local`,prob:prob.h,best:prob.h===maxP},
-        ...(prob.d?[{label:'X Empate',prob:prob.d,best:prob.d===maxP}]:[]),
-        {label:'2 Visitante',prob:prob.a,best:prob.a===maxP},
-      ]
-    });
-  }
-
-  // ─── GOLES ───
-  if(hf.n&&af.n&&prob){
-    const{lH,lA}=prob;
-    const p05=pOverGoals(lH,lA,0);
-    const p15=pOverGoals(lH,lA,1);
-    const p25=pOverGoals(lH,lA,2);
-    const p35=pOverGoals(lH,lA,3);
-    const p45=pOverGoals(lH,lA,4);
-    // Pick best line to recommend
-    const bestGoal=p15>=0.7?{bet:'+1.5 goles',prob:p15}:p25>=0.55?{bet:'+2.5 goles',prob:p25}:{bet:'+0.5 goles',prob:p05};
-    recs.push({
-      cat:'⚽ Goles totales',key:'goals',
-      topBet:bestGoal.bet,topProb:bestGoal.prob,
-      lines:[
-        {label:'+0.5 goles',prob:p05},
-        {label:'+1.5 goles',prob:p15,best:p15>=0.6},
-        {label:'+2.5 goles',prob:p25,best:p25>=0.55},
-        {label:'+3.5 goles',prob:p35},
-        {label:'+4.5 goles',prob:p45},
-      ]
-    });
-
-    // ─── BTTS ───
-    const pBTTS=(1-Math.exp(-lH))*(1-Math.exp(-lA));
-    recs.push({
-      cat:'🤝 Ambos marcan',key:'btts',
-      topBet:pBTTS>=0.5?'Sí — ambos marcan':'No — no marcan ambos',
-      topProb:pBTTS>=0.5?pBTTS:1-pBTTS,
-      lines:[
-        {label:'Sí — ambos marcan',prob:pBTTS,best:pBTTS>=0.5},
-        {label:'No — no marcan ambos',prob:1-pBTTS,best:pBTTS<0.5},
-      ]
-    });
-
-    // ─── CÓRNERS (estimado por intensidad ofensiva) ───
-    const cornersL=Math.max(6,Math.min(14,9.2+(hf.gf+af.gf)/2*1.4-1.4*1.4));
-    const pC=(t)=>{let u=0;for(let k=0;k<=t;k++)u+=poisson(cornersL,k);return Math.max(0.1,Math.min(0.93,1-u));};
-    const c75=pC(7),c85=pC(8),c95=pC(9),c105=pC(10);
-    const bestC=c85>=0.55?{bet:'+8.5 córners',prob:c85}:c75>=0.6?{bet:'+7.5 córners',prob:c75}:{bet:'+9.5 córners',prob:c95};
-    recs.push({
-      cat:'📐 Córners',key:'corners',estimated:true,
-      topBet:bestC.bet,topProb:bestC.prob,
-      lines:[
-        {label:'+7.5 córners',prob:c75},
-        {label:'+8.5 córners',prob:c85,best:true},
-        {label:'+9.5 córners',prob:c95},
-        {label:'+10.5 córners',prob:c105},
-      ]
-    });
-
-    // ─── TARJETAS (estimado por intensidad defensiva) ───
-    const cardsL=Math.max(2.5,Math.min(6.5,3.8+(hf.ga+af.ga)/2*0.7-1.3*0.7));
-    const pK=(t)=>{let u=0;for(let k=0;k<=t;k++)u+=poisson(cardsL,k);return Math.max(0.1,Math.min(0.92,1-u));};
-    const k25=pK(2),k35=pK(3),k45=pK(4),k55=pK(5);
-    const bestK=k35>=0.5?{bet:'+3.5 tarjetas',prob:k35}:{bet:'+2.5 tarjetas',prob:k25};
-    recs.push({
-      cat:'🟨 Tarjetas',key:'cards',estimated:true,
-      topBet:bestK.bet,topProb:bestK.prob,
-      lines:[
-        {label:'+2.5 tarjetas',prob:k25},
-        {label:'+3.5 tarjetas',prob:k35,best:true},
-        {label:'+4.5 tarjetas',prob:k45},
-        {label:'+5.5 tarjetas',prob:k55},
-      ]
-    });
-  }
-
-  // Sort by topProb descending
-  recs.sort((a,b)=>b.topProb-a.topProb);
-  return recs;
-}
-
-// ── CONFIDENCE CLASS ──
-function confCls(p){return p>=0.70?'hi':p>=0.55?'md':'lo';}
-function confColor(p){return p>=0.70?'var(--acc)':p>=0.55?'var(--warn)':'var(--mut)';}
-
-// ── FORM HELPERS ──
-const norm2=s=>(s||'').toLowerCase();
-function calcForm(events,teamName){
-  if(!events?.length)return{w:0,d:0,l:0,form:[],gf:0,ga:0,n:0};
-  let w=0,d=0,l=0,gf=0,ga=0;const form=[];
-  for(const ev of events){
-    const isH=norm2(ev.strHomeTeam||'').includes(norm2(teamName).slice(0,5));
-    const hs=parseInt(ev.intHomeScore||''),as=parseInt(ev.intAwayScore||'');
-    if(isNaN(hs)||isNaN(as)){form.push('p');continue;}
-    const ms=isH?hs:as,ts=isH?as:hs;
-    gf+=ms;ga+=ts;
-    if(ms>ts){w++;form.push('W');}else if(ms===ts){d++;form.push('D');}else{l++;form.push('L');}
-  }
-  const n=w+d+l;
-  return{w,d,l,form:form.slice(0,5),gf:n?+(gf/n).toFixed(2):0,ga:n?+(ga/n).toFixed(2):0,n};
-}
-
-async function searchSDB(name){
-  try{const r=await fetch(`${SDB}/searchteams.php?t=${encodeURIComponent(name)}`);const d=await r.json();return d.teams?.[0]||null;}catch{return null;}
-}
-async function getLastEvents(id,n=12){
-  try{const r=await fetch(`${SDB}/eventslast15.php?id=${id}`);const d=await r.json();return(d.results||[]).slice(0,n);}catch{return[];}
-}
-
-async function getESPNFixtures(espnPath){
-  const today=new Date();
-  const all=[];
-  const dates=Array.from({length:UPCOMING_DAYS},(_,i)=>{const d=new Date(today);d.setDate(d.getDate()+i);return d.toISOString().slice(0,10).replace(/-/g,'');});
-  const batches=[];for(let i=0;i<dates.length;i+=3)batches.push(dates.slice(i,i+3));
-  for(const b of batches){
-    const res=await Promise.all(b.map(async dt=>{
-      try{const r=await fetch(`https://site.api.espn.com/apis/site/v2/sports/${espnPath}/scoreboard?dates=${dt}&limit=100`);if(!r.ok)return[];const d=await r.json();return(d.events||[]).filter(ev=>ev.status?.type?.state==='pre');}catch{return[];}
-    }));
-    res.forEach(r=>all.push(...r));
-  }
-  return all;
-}
-
-async function getKambiForStats(sportKey){
-  if(kambiCache[sportKey])return kambiCache[sportKey];
-  const evts=await tryKambi(sportKey,'betplay',['betplay']);
-  kambiCache[sportKey]=evts;
-  return evts;
-}
-
-// ── STATS LOAD ──
-async function loadStats(sportKey,leagueIdx){
-  statsDone=false;statsSport=sportKey;statsLeagueIdx=leagueIdx;
-  const sp=SPORT_MAP[sportKey];
-
-  // Sport tabs
-  document.getElementById('statsSportTabs').innerHTML=
-    ['football','basketball','baseball','ice_hockey','american_football','tennis','boxing'].map(s=>
-      `<button class="stab${s===sportKey?' on':''}" onclick="loadStats('${s}',0)">${SPORT_LABELS[s]||s}</button>`).join('');
-
-  // League tabs
-  const leagues=sp?.espnNames||[];
-  document.getElementById('leagueTabs').innerHTML=leagues.map((n,i)=>
-    `<button class="ltab${i===leagueIdx?' on':''}" onclick="loadStats('${sportKey}',${i})">${n}</button>`).join('');
-
-  document.getElementById('matchGrid').innerHTML='<div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div>';
-  document.getElementById('statsCd').textContent='Cargando...';
-  document.getElementById('sortNote').textContent='Ordenando por mayor confianza...';
-
-  const espnPaths=sp?.espn||[];
-  const currentPath=espnPaths[leagueIdx];
-
-  let fixtures=[];
-  if(currentPath){
-    fixtures=await getESPNFixtures(currentPath);
-    fixtures.sort((a,b)=>new Date(a.date||0)-new Date(b.date||0));
-  }else{
-    const kEvts=await getKambiForStats(sportKey);
-    fixtures=kEvts.slice(0,16).map(e=>({_kambi:true,home:e.home,away:e.away,h:e.h,d:e.d,a:e.a,is3way:e.is3way,date:e.start?new Date(e.start):null}));
-  }
-
-  const betplayEvts=await getKambiForStats(sportKey);
-  const cards=[];
-  const t0=Date.now();
-  const limit=Math.min(fixtures.length,14);
-  const isWC=currentPath?.includes('fifa.world');
-
-  for(let i=0;i<limit;i++){
-    if(Date.now()-t0>28000)break;
-    const ev=fixtures[i];
-    let home,away,matchDate,league;
-    if(ev._kambi){home=ev.home;away=ev.away;matchDate=ev.date;league='';}
-    else{
-      const comp=ev.competitions?.[0];const comps=comp?.competitors||[];
-      const hC=comps.find(c=>c.homeAway==='home')||comps[0];const aC=comps.find(c=>c.homeAway==='away')||comps[1];
-      home=hC?.team?.displayName||hC?.team?.name||'?';away=aC?.team?.displayName||aC?.team?.name||'?';
-      matchDate=ev.date?new Date(ev.date):null;league=ev.leagues?.[0]?.name||'';
-    }
-    if(!home||home==='?'||!away||away==='?')continue;
-
-    // TheSportsDB form
-    let hf={w:0,d:0,l:0,form:[],gf:0,ga:0,n:0};
-    let af={w:0,d:0,l:0,form:[],gf:0,ga:0,n:0};
-    try{
-      const[th,ta]=await Promise.all([searchSDB(home),searchSDB(away)]);
-      if(th?.idTeam){const e=await getLastEvents(th.idTeam);hf=calcForm(e,home);}
-      if(ta?.idTeam){const e=await getLastEvents(ta.idTeam);af=calcForm(e,away);}
-    }catch{}
-
-    // Recommendations
-    const recs=calcAllRecs(hf,af,home,away);
-    const topRec=recs[0]||null;
-
-    // Betplay odds
-    const bpEv=betplayEvts.find(e=>nmatch(e.home,home)&&nmatch(e.away,away));
-    const bkOdds=bpEv?{h:bpEv.h,d:bpEv.d,a:bpEv.a,is3:bpEv.is3way}:null;
-
-    // Value detection on winner market
-    let valH=false,valD=false,valA=false;
-    const prob=calcProb(hf,af);
-    if(prob&&bkOdds){
-      valH=prob.h>1/bkOdds.h+0.05;
-      valD=bkOdds.d?prob.d>1/bkOdds.d+0.05:false;
-      valA=prob.a>1/bkOdds.a+0.05;
-    }
-    const hasValue=valH||valD||valA;
-    const bestConfidence=topRec?.topProb||0;
-
-    cards.push({home,away,matchDate,league,isWC,hf,af,recs,topRec,bkOdds,hasValue,valH,valD,valA,bestConfidence});
-  }
-
-  // Sort by best confidence descending
-  cards.sort((a,b)=>b.bestConfidence-a.bestConfidence);
-  statsCards=cards;
-  renderStats();
-  statsDone=true;
-  document.getElementById('sortNote').textContent=`${cards.length} partidos · ordenados por mayor confianza`;
-
-  clearInterval(statsTimer);
-  let scd=STATS_SEC;
-  statsTimer=setInterval(()=>{
-    scd--;document.getElementById('statsCd').textContent=`Actualiza en ${scd}s`;
-    if(scd<=0){scd=STATS_SEC;kambiCache={};loadStats(statsSport,statsLeagueIdx);}
-  },1000);
-}
-
-// ── RENDER MATCH DATE ──
-function fmtDate(d){
-  if(!d)return'';
-  const now=new Date();const diff=Math.floor((d-now)/86400000);
-  if(diff<0)return'En curso 🔴';
-  if(diff===0)return'Hoy ⏰ '+d.toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'});
-  if(diff===1)return'Mañana · '+d.toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'});
-  return d.toLocaleDateString('es-CO',{weekday:'short',day:'numeric',month:'short'})+' · '+d.toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'});
-}
-
-
-// ── RENDER STATS (redesign: 5 categorías con % prominente) ──
-function renderStats(){
-  const grid=document.getElementById('matchGrid');
-  if(!statsCards.length){
-    grid.innerHTML='<div class="stbox" style="grid-column:1/-1;padding:35px"><h3>Sin próximos partidos</h3><p>Prueba otro deporte o liga</p></div>';
-    return;
-  }
-
-  const pct=p=>Math.round(p*100);
-  const cc=p=>p>=0.70?'var(--acc)':p>=0.55?'var(--warn)':'var(--mut)';
-  const miniBar=p=>'<div class="mini-bar"><div class="mini-fill" style="width:'+pct(p)+'%;background:'+cc(p)+'"></div></div>';
-  const formDots=f=>(f||[]).map(x=>'<div class="fd '+x+'">'+(x==='p'?'?':x)+'</div>').join('');
-
-  grid.innerHTML=statsCards.map(function(card){
-    var home=card.home,away=card.away,matchDate=card.matchDate,league=card.league,isWC=card.isWC;
-    var hf=card.hf,af=card.af,recs=card.recs,topRec=card.topRec,bkOdds=card.bkOdds;
-    var hasValue=card.hasValue,valH=card.valH,valD=card.valD,valA=card.valA;
-    var hasStats=hf.n>0||af.n>0;
-
-    // ── MEJOR APUESTA banner ──
-    var topBlock;
-    if(topRec){
-      topBlock='<div class="top-pick">'
-        +'<div class="tp-lbl">⭐ Mejor apuesta'+(topRec.estimated?' · estimado':'')+'</div>'
-        +'<div class="tp-bet"><span>'+topRec.cat+' · <b>'+topRec.topBet+'</b></span>'
-        +'<span class="tp-pct" style="color:'+cc(topRec.topProb)+'">'+pct(topRec.topProb)+'%</span></div>'
-        +'<div class="conf-bar"><div class="conf-fill" style="width:'+pct(topRec.topProb)+'%;background:'+cc(topRec.topProb)+'"></div></div>'
-        +'</div>';
-    } else {
-      topBlock='<div class="no-stats-msg">Sin datos estadísticos suficientes</div>';
-    }
-
-    // Map recs por clave
-    var byKey={};
-    recs.forEach(function(r){byKey[r.key]=r;});
-
-    // ── 🏆 GANADOR — barras horizontales ──
-    var winBlock='';
-    var wr=byKey.winner;
-    if(wr){
-      var wlines=wr.lines.map(function(l){
-        var star='';
-        if((l.label.indexOf('ocal')>-1&&valH)||(l.label.indexOf('mpat')>-1&&valD)||(l.label.indexOf('isit')>-1&&valA)) star='<span class="val-star">&#x2B50;</span>';
-        return '<div class="win-line'+(l.best?' best-line':'')+'"><span class="win-label">'+l.label+'</span>'+miniBar(l.prob)+'<span class="win-pct" style="color:'+cc(l.prob)+'">'+pct(l.prob)+'%</span>'+star+'</div>';
-      }).join('');
-      winBlock='<div class="cat-block cat-winner"><div class="cat-title">&#x1F3C6; Ganador</div>'+wlines+'</div>';
-    }
-
-    // ── Builder categoría secundaria ──
-    function catBlock(r){
-      if(!r)return'';
-      var lines=r.lines.map(function(l){
-        return '<div class="cat-line'+(l.best?' best-line':'')+'"><span class="cat-label">'+l.label+'</span><span class="cat-pct" style="color:'+cc(l.prob)+'">'+pct(l.prob)+'%</span></div>'+(l.best?'<div style="margin:1px 0 4px">'+miniBar(l.prob)+'</div>':'');
-      }).join('');
-      return '<div class="cat-block"><div class="cat-title'+(r.estimated?' cat-est':'')+'">'+r.cat+'</div>'+lines+'</div>';
-    }
-
-    // ── Grid 2x2: Goles · BTTS · Cornes · Tarjetas ──
-    var cats=[byKey.goals,byKey.btts,byKey.corners,byKey.cards].filter(Boolean);
-    var catGridHTML=cats.length?'<div class="cat-grid">'+cats.map(catBlock).join('')+'</div>':'';
-
-    // ── Cuotas Betplay ──
-    var oddsStrip='';
-    if(bkOdds){
-      oddsStrip='<div class="odds-strip"><span class="os-bk">Betplay:</span>'
-        +'<span class="os-pill'+(valH?' val':'')+'">1: '+bkOdds.h+(valH?' &#x2B50;':'')+'</span>'
-        +(bkOdds.d?'<span class="os-pill'+(valD?' val':'')+'">X: '+bkOdds.d+(valD?' &#x2B50;':'')+'</span>':'')
-        +'<span class="os-pill'+(valA?' val':'')+'">2: '+bkOdds.a+(valA?' &#x2B50;':'')+'</span>'
-        +'</div>';
-    }
-
-    // ── Forma ──
-    var formHTML='';
-    if(hasStats){
-      formHTML='<div style="margin-bottom:9px">'
-        +'<div class="frow"><span class="flbl">'+home.slice(0,12)+'</span><div class="fdots">'+formDots(hf.form)+'</div>'+(hf.n?'<span class="fstat">'+hf.gf+'gf&#xB7;'+hf.ga+'gc</span>':'')+'</div>'
-        +'<div class="frow"><span class="flbl">'+away.slice(0,12)+'</span><div class="fdots">'+formDots(af.form)+'</div>'+(af.n?'<span class="fstat">'+af.gf+'gf&#xB7;'+af.ga+'gc</span>':'')+'</div>'
-        +'</div>';
-    }
-
-    var metaDate=matchDate?fmtDate(matchDate)+(league?' · ':''):'';
-
-    return '<div class="mc'+(hasValue?' has-value':'')+(isWC?' wc':'')+'"><div class="mc-head"><div>'
-      +'<div class="mc-teams">'+(isWC?'<span class="wc-badge">&#x1F30D; MUNDIAL</span>':'')+home+' <span style="color:var(--mut)">vs</span> '+away+'</div>'
-      +'<div class="mc-meta">'+metaDate+(league||'')+'</div>'
-      +'</div>'+(hasValue?'<span class="val-badge">&#x2B50; VALOR</span>':'')+'</div>'
-      +formHTML+topBlock+winBlock+catGridHTML+oddsStrip+'</div>';
-  }).join('');
-}
-
 // =====================================================
 // INIT
 // =====================================================
@@ -1925,8 +1517,12 @@ document.addEventListener('DOMContentLoaded',async function(){
       const prev=proxyOk;
       await checkProxy();
       if(proxyOk&&!prev&&scanDone){
-        document.getElementById('stxt').textContent='🔌 Proxy reconectado — actualizando...';
-        setTimeout(()=>startScan(),1200);
+        document.getElementById('stxt').textContent='🔌 Proxy activo — actualizando...';
+        setTimeout(()=>startScan(),800);
       }
     }
-  },800
+  },8000);
+});
+</script>
+</body>
+</html>
